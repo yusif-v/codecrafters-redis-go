@@ -5,7 +5,11 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 )
+
+var store = map[string]string{}
+var mu sync.Mutex
 
 func parseRESP(input string) []string {
 	parts := strings.Split(input, "\r\n")
@@ -41,6 +45,20 @@ func handleConnection(conn net.Conn) {
 		case "echo":
 			arg := parts[1]
 			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(arg), arg)
+		case "set":
+			mu.Lock()
+			store[parts[1]] = parts[2]
+			mu.Unlock()
+			conn.Write([]byte("+OK\r\n"))
+		case "get":
+			mu.Lock()
+			val, ok := store[parts[1]]
+			mu.Unlock()
+			if ok {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			} else {
+				conn.Write([]byte("$-1\r\n"))
+			}
 		}
 	}
 }
