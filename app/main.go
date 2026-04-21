@@ -84,6 +84,7 @@ func handleConnection(conn net.Conn) {
 			item.list = append(item.list, parts[2])
 			store[parts[1]] = item
 			mu.Unlock()
+			conn.Write([]byte("+OK\r\n"))
 		}
 	}
 }
