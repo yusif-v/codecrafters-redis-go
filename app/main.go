@@ -81,11 +81,11 @@ func handleConnection(conn net.Conn) {
 		case "rpush":
 			mu.Lock()
 			item := store[parts[1]]
-			if len(parts) > 3 {
-				for _, val := range parts[3:] {
-					item.list = append(item.list, val)
-				}
+
+			for _, val := range parts[2:] {
+				item.list = append(item.list, val)
 			}
+
 			store[parts[1]] = item
 			mu.Unlock()
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
