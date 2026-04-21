@@ -12,6 +12,7 @@ import (
 
 type entry struct {
 	value  string
+	list   []string
 	expiry time.Time
 }
 
@@ -77,6 +78,12 @@ func handleConnection(conn net.Conn) {
 			} else {
 				conn.Write([]byte("$-1\r\n"))
 			}
+		case "rpush":
+			mu.Lock()
+			item := store[parts[1]]
+			item.list = append(item.list, parts[2])
+			store[parts[1]] = item
+			mu.Unlock()
 		}
 	}
 }
