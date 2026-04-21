@@ -95,8 +95,8 @@ func handleConnection(conn net.Conn) {
 			start, _ := strconv.Atoi(parts[2])
 			end, _ := strconv.Atoi(parts[3])
 			sublist := item.list[start:end]
-			for i, val := range sublist {
-				fmt.Fprintf(conn, "%d) %s\n", i+1, val)
+			for _, val := range sublist {
+				fmt.Fprintf(conn, "%d) %s\n", val)
 			}
 
 		}
