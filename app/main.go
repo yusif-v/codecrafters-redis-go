@@ -4,7 +4,20 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
+
+func parseRESP(input string) []string {
+	parts := strings.Split(input, "\r\n")
+	var result []string
+	for _, part := range parts {
+		if part == "" || part[0] == '*' || part[0] == '$' {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
+}
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
@@ -15,7 +28,20 @@ func handleConnection(conn net.Conn) {
 			fmt.Println("Error reading buffer: ", err.Error())
 			return
 		}
-		conn.Write([]byte("+PONG\r\n"))
+
+		parts := parseRESP(string(buf))
+		if len(parts) == 0 {
+			continue
+		}
+
+		command := strings.ToLower(parts[0])
+		switch command {
+		case "ping":
+			conn.Write([]byte("+PONG\r\n"))
+		case "echo":
+			arg := parts[1]
+			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(arg), arg)
+		}
 	}
 }
 
