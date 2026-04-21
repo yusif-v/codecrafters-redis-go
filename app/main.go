@@ -4,11 +4,18 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
-var store = map[string]string{}
+type entry struct {
+	value  string
+	expiry time.Time
+}
+
+var store = map[string]entry{}
 var mu sync.Mutex
 
 func parseRESP(input string) []string {
@@ -21,6 +28,13 @@ func parseRESP(input string) []string {
 		result = append(result, part)
 	}
 	return result
+}
+
+func deleteAfter(key string, delay time.Duration) {
+	time.Sleep(delay)
+	mu.Lock()
+	delete(store, key)
+	mu.Unlock()
 }
 
 func handleConnection(conn net.Conn) {
@@ -47,15 +61,19 @@ func handleConnection(conn net.Conn) {
 			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(arg), arg)
 		case "set":
 			mu.Lock()
-			store[parts[1]] = parts[2]
+			store[parts[1]] = entry{value: parts[2]}
 			mu.Unlock()
+			if len(parts) > 3 && strings.ToLower(parts[3]) == "px" {
+				ms, _ := strconv.Atoi(parts[4])
+				go deleteAfter(parts[1], time.Duration(ms)*time.Millisecond)
+			}
 			conn.Write([]byte("+OK\r\n"))
 		case "get":
 			mu.Lock()
 			val, ok := store[parts[1]]
 			mu.Unlock()
 			if ok {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val.value), val.value)
 			} else {
 				conn.Write([]byte("$-1\r\n"))
 			}
