@@ -82,7 +82,7 @@ func handleConnection(conn net.Conn) {
 			mu.Lock()
 			item := store[parts[1]]
 			if len(parts) > 3 {
-				for _, val := range parts[2:] {
+				for _, val := range parts[3:] {
 					item.list = append(item.list, val)
 				}
 			}
