@@ -42,13 +42,13 @@ func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	buf := make([]byte, 2048)
 	for {
-		_, err := conn.Read(buf)
+		n, err := conn.Read(buf)
 		if err != nil {
 			fmt.Println("Error reading buffer: ", err.Error())
 			return
 		}
 
-		parts := parseRESP(string(buf))
+		parts := parseRESP(string(buf[:n]))
 		if len(parts) == 0 {
 			continue
 		}
