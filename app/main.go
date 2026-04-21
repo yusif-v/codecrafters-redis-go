@@ -89,6 +89,16 @@ func handleConnection(conn net.Conn) {
 			store[parts[1]] = item
 			mu.Unlock()
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+		case "lrange":
+			mu.Lock()
+			item := store[parts[1]]
+			start, _ := strconv.Atoi(parts[2])
+			end, _ := strconv.Atoi(parts[3])
+			sublist := item.list[start:end]
+			for i, val := range sublist {
+				fmt.Fprintf(conn, "%d) %s\n", i+1, val)
+			}
+
 		}
 	}
 }
