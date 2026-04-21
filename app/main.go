@@ -92,13 +92,23 @@ func handleConnection(conn net.Conn) {
 		case "lrange":
 			mu.Lock()
 			item := store[parts[1]]
+			mu.Unlock()
 			start, _ := strconv.Atoi(parts[2])
 			end, _ := strconv.Atoi(parts[3])
-			sublist := item.list[start:end]
-			for _, val := range sublist {
-				fmt.Fprintf(conn, "%s\n", val)
+
+			if start >= len(item.list) || start > end {
+				conn.Write([]byte("*0\r\n"))
+				continue
+			}
+			if end >= len(item.list) {
+				end = len(item.list) - 1
 			}
 
+			sublist := item.list[start : end+1]
+			fmt.Fprintf(conn, "*%d\r\n", len(sublist))
+			for _, val := range sublist {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			}
 		}
 	}
 }
