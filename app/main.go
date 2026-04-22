@@ -82,7 +82,9 @@ func handleConnection(conn net.Conn) {
 			mu.Lock()
 
 			item := store[parts[1]]
-			item.list = append(item.list, parts[2:]...)
+			for _, val := range parts[2:] {
+				item.list = append(item.list, []string{val}...)
+			}
 			store[parts[1]] = item
 
 			mu.Unlock()
