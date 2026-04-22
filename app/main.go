@@ -131,16 +131,32 @@ func handleConnection(conn net.Conn) {
 		case "llen":
 			mu.Lock()
 			item := store[parts[1]]
-			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
 			mu.Unlock()
+			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
 		case "lpop":
 			mu.Lock()
 			item := store[parts[1]]
-			val := item.list[0]
-			item.list = item.list[1:]
-			store[parts[1]] = item
-			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
-			mu.Unlock()
+
+			if len(parts) > 2 {
+				count, _ := strconv.Atoi(parts[2])
+				if count > len(item.list) {
+					count = len(item.list)
+				}
+				popped := item.list[:count]
+				item.list = item.list[count:]
+				store[parts[1]] = item
+				mu.Unlock()
+				fmt.Fprintf(conn, "*%d\r\n", len(popped))
+				for _, val := range popped {
+					fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+				}
+			} else {
+				val := item.list[0]
+				item.list = item.list[1:]
+				store[parts[1]] = item
+				mu.Unlock()
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			}
 		}
 	}
 }
