@@ -133,6 +133,13 @@ func handleConnection(conn net.Conn) {
 			item := store[parts[1]]
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
 			mu.Unlock()
+		case "lpop":
+			mu.Lock()
+			item := store[parts[1]]
+			val := item.list[0]
+			item.list = item.list[1:]
+			fmt.Fprintf(conn, "+%s\r\n", val)
+			mu.Unlock()
 		}
 	}
 }
