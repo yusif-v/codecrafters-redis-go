@@ -138,6 +138,7 @@ func handleConnection(conn net.Conn) {
 			item := store[parts[1]]
 			val := item.list[0]
 			item.list = item.list[1:]
+			store[parts[1]] = item
 			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
 			mu.Unlock()
 		}
