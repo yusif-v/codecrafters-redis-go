@@ -93,12 +93,20 @@ func handleConnection(conn net.Conn) {
 			mu.Lock()
 			item := store[parts[1]]
 			mu.Unlock()
+
 			start, _ := strconv.Atoi(parts[2])
 			end, _ := strconv.Atoi(parts[3])
 
+			if start < 0 {
+				start = len(item.list) + start
+			}
 			if start >= len(item.list) || start > end {
 				conn.Write([]byte("*0\r\n"))
 				continue
+			}
+
+			if end < 0 {
+				end = len(item.list) + end
 			}
 			if end >= len(item.list) {
 				end = len(item.list) - 1
