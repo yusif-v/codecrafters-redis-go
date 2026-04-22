@@ -128,6 +128,11 @@ func handleConnection(conn net.Conn) {
 
 			mu.Unlock()
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+		case "llen":
+			mu.Lock()
+			item := store[parts[1]]
+			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+			mu.Unlock()
 		}
 	}
 }
