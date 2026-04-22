@@ -97,7 +97,12 @@ func handleConnection(conn net.Conn) {
 			start, _ := strconv.Atoi(parts[2])
 			end, _ := strconv.Atoi(parts[3])
 
-			start = max(0, len(item.list)+start)
+			if start < 0 {
+				start = len(item.list) + start
+				if start < 0 {
+					start = 0
+				}
+			}
 			if end < 0 {
 				end = len(item.list) + end
 			}
