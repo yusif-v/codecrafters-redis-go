@@ -80,13 +80,11 @@ func handleConnection(conn net.Conn) {
 			}
 		case "rpush":
 			mu.Lock()
+
 			item := store[parts[1]]
-
-			for _, val := range parts[2:] {
-				item.list = append(item.list, val)
-			}
-
+			item.list = append(item.list, parts[2:]...)
 			store[parts[1]] = item
+
 			mu.Unlock()
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
 		case "lrange":
@@ -117,6 +115,15 @@ func handleConnection(conn net.Conn) {
 			for _, val := range sublist {
 				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
 			}
+		case "lpush":
+			mu.Lock()
+
+			item := store[parts[1]]
+			item.list = append(parts[2:], item.list...)
+			store[parts[1]] = item
+
+			mu.Unlock()
+			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
 		}
 	}
 }
