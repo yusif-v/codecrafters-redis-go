@@ -87,6 +87,7 @@ func handleConnection(conn net.Conn) {
 				item.list = append(item.list, val)
 			}
 			store[parts[1]] = item
+			listLen := len(item.list)
 
 			// Notify waiters (BLPOP clients) in FIFO order
 			for len(waiters[parts[1]]) > 0 && len(item.list) > 0 {
@@ -99,7 +100,7 @@ func handleConnection(conn net.Conn) {
 			}
 
 			mu.Unlock()
-			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+			fmt.Fprintf(conn, ":%d\r\n", listLen)
 		case "lrange":
 			mu.Lock()
 			item := store[parts[1]]
