@@ -18,6 +18,7 @@ type entry struct {
 
 var store = map[string]entry{}
 var mu sync.Mutex
+var waiters = map[string][]chan string{}
 
 func parseRESP(input string) []string {
 	parts := strings.Split(input, "\r\n")
@@ -83,9 +84,19 @@ func handleConnection(conn net.Conn) {
 
 			item := store[parts[1]]
 			for _, val := range parts[2:] {
-				item.list = append(item.list, []string{val}...)
+				item.list = append(item.list, val)
 			}
 			store[parts[1]] = item
+
+			// Notify waiters (BLPOP clients) in FIFO order
+			for len(waiters[parts[1]]) > 0 && len(item.list) > 0 {
+				ch := waiters[parts[1]][0]
+				waiters[parts[1]] = waiters[parts[1]][1:]
+				val := item.list[0]
+				item.list = item.list[1:]
+				store[parts[1]] = item
+				ch <- val
+			}
 
 			mu.Unlock()
 			fmt.Fprintf(conn, ":%d\r\n", len(item.list))
@@ -156,6 +167,28 @@ func handleConnection(conn net.Conn) {
 				store[parts[1]] = item
 				mu.Unlock()
 				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			}
+		case "blpop":
+			key := parts[1]
+			// timeout := parts[2] — always 0 in this stage, block indefinitely
+
+			mu.Lock()
+			item := store[key]
+			if len(item.list) > 0 {
+				// Element available immediately
+				val := item.list[0]
+				item.list = item.list[1:]
+				store[key] = item
+				mu.Unlock()
+				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+			} else {
+				// Block: register a waiter channel
+				ch := make(chan string, 1)
+				waiters[key] = append(waiters[key], ch)
+				mu.Unlock()
+
+				val := <-ch
+				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 			}
 		}
 	}
