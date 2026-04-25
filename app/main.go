@@ -232,6 +232,7 @@ func handleConnection(conn net.Conn) {
 			item.stream = append(item.stream, id)
 			store[key] = item
 			mu.Unlock()
+			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
 		}
 	}
 }
