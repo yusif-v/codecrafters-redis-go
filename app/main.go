@@ -195,7 +195,6 @@ func handleConnection(conn net.Conn) {
 				return
 			}
 
-			// timeout case
 			ch := make(chan string, 1)
 			mu.Lock()
 			waiters[key] = append(waiters[key], ch)
@@ -209,6 +208,22 @@ func handleConnection(conn net.Conn) {
 			case <-timer.C:
 				conn.Write([]byte("*-1\r\n"))
 			}
+		case "type":
+			mu.Lock()
+			entry, ok := store[parts[1]]
+			mu.Unlock()
+
+			if !ok {
+				conn.Write([]byte("$-1\r\n"))
+				return
+			}
+
+			if len(entry.list) > 0 {
+				conn.Write([]byte("+list\r\n"))
+			} else {
+				conn.Write([]byte("+string\r\n"))
+			}
+
 		}
 	}
 }
