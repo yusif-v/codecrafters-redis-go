@@ -255,7 +255,7 @@ func handleConnection(conn net.Conn) {
 				}
 			} else if id == "0-0" || !isGreaterID(id, "0-0") {
 				mu.Unlock()
-				conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
+				conn.Write([]byte("-ERR The ID specified in XADD must be greater than 0-0\r\n"))
 				return
 			}
 
