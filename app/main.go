@@ -13,6 +13,7 @@ import (
 type entry struct {
 	value  string
 	list   []string
+	stream []string
 	expiry time.Time
 }
 
@@ -223,6 +224,14 @@ func handleConnection(conn net.Conn) {
 			} else {
 				conn.Write([]byte("+string\r\n"))
 			}
+		case "xadd":
+			key := parts[1]
+			id := parts[2]
+			mu.Lock()
+			item := store[key]
+			item.stream = append(item.stream, id)
+			store[key] = item
+			mu.Unlock()
 		}
 	}
 }
