@@ -191,14 +191,18 @@ func handleConnection(conn net.Conn) {
 			waiters[key] = append(waiters[key], ch)
 			mu.Unlock()
 
-			timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
-
-			select {
-			case val := <-ch:
-				timer.Stop()
+			if timeoutSec == 0 {
+				val := <-ch
 				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-			case <-timer.C:
-				conn.Write([]byte("*-1\r\n"))
+			} else {
+				timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
+				select {
+				case val := <-ch:
+					timer.Stop()
+					fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+				case <-timer.C:
+					conn.Write([]byte("*-1\r\n"))
+				}
 			}
 		case "type":
 			mu.Lock()
