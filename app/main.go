@@ -214,7 +214,7 @@ func handleConnection(conn net.Conn) {
 			mu.Unlock()
 
 			if !ok {
-				conn.Write([]byte("$-1\r\n"))
+				conn.Write([]byte("+none\r\n"))
 				return
 			}
 
@@ -223,7 +223,6 @@ func handleConnection(conn net.Conn) {
 			} else {
 				conn.Write([]byte("+string\r\n"))
 			}
-
 		}
 	}
 }
