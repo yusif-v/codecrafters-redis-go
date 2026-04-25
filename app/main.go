@@ -40,6 +40,25 @@ func deleteAfter(key string, delay time.Duration) {
 	mu.Unlock()
 }
 
+func isGreaterID(newID, lastID string) bool {
+	nt, ns := parseID(newID)
+	lt, ls := parseID(lastID)
+	if nt != lt {
+		return nt > lt
+	}
+	return ns > ls
+}
+
+func parseID(id string) (int64, int64) {
+	p := strings.Split(id, "-")
+	if len(p) != 2 {
+		return 0, 0
+	}
+	t, _ := strconv.ParseInt(p[0], 10, 64)
+	s, _ := strconv.ParseInt(p[1], 10, 64)
+	return t, s
+}
+
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	buf := make([]byte, 2048)
@@ -224,11 +243,26 @@ func handleConnection(conn net.Conn) {
 		case "xadd":
 			key := parts[1]
 			id := parts[2]
+
 			mu.Lock()
 			item := store[key]
+			if len(item.stream > 0) {
+				last := item.stream[len(item.stream)-1]
+				if !isGreaterID(id, last) {
+					mu.Unlock()
+					conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
+					return
+				}
+			} else if id == "0-0" || !isGreaterID(id, "0-0") {
+				mu.Unlock()
+				conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
+				return
+			}
+
 			item.stream = append(item.stream, id)
 			store[key] = item
 			mu.Unlock()
+
 			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
 		}
 	}
