@@ -221,6 +221,8 @@ func handleConnection(conn net.Conn) {
 
 			if len(entry.list) > 0 {
 				conn.Write([]byte("+list\r\n"))
+			} else if len(entry.stream) > 0 {
+				conn.Write([]byte("+stream\r\n"))
 			} else {
 				conn.Write([]byte("+string\r\n"))
 			}
