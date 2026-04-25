@@ -170,53 +170,44 @@ func handleConnection(conn net.Conn) {
 				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
 			}
 		case "blpop":
-			if len(parts) < 3 {
-				// error handling if needed
-				conn.Write([]byte("-ERR wrong number of arguments\r\n"))
-				continue
-			}
 			key := parts[1]
-			timeoutSec, _ := strconv.ParseFloat(parts[2], 64) // supports 0.2 etc.
+			timeoutSec, _ := strconv.ParseFloat(parts[2], 64)
 
 			mu.Lock()
-			item := store[key]
-			if len(item.list) > 0 {
+			item, exists := store[key]
+			if exists && len(item.list) > 0 {
 				val := item.list[0]
 				item.list = item.list[1:]
 				store[key] = item
 				mu.Unlock()
 				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-				continue
+				return
 			}
 			mu.Unlock()
 
 			if timeoutSec == 0 {
-				// indefinite block (existing waiter logic)
 				ch := make(chan string, 1)
 				mu.Lock()
 				waiters[key] = append(waiters[key], ch)
 				mu.Unlock()
 				val := <-ch
 				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-			} else {
-				// timeout case
-				ch := make(chan string, 1)
-				mu.Lock()
-				waiters[key] = append(waiters[key], ch)
-				mu.Unlock()
+				return
+			}
 
-				timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
-				select {
-				case val := <-ch:
-					timer.Stop()
-					fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-				case <-timer.C:
-					// clean waiter if still present (optional but good)
-					mu.Lock()
-					// remove this ch from waiters[key] if needed
-					mu.Unlock()
-					conn.Write([]byte("*-1\r\n")) // nil multi-bulk for timeout
-				}
+			// timeout case
+			ch := make(chan string, 1)
+			mu.Lock()
+			waiters[key] = append(waiters[key], ch)
+			mu.Unlock()
+
+			timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
+			select {
+			case val := <-ch:
+				timer.Stop()
+				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+			case <-timer.C:
+				conn.Write([]byte("*-1\r\n"))
 			}
 		}
 	}
