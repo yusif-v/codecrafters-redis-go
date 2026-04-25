@@ -246,7 +246,7 @@ func handleConnection(conn net.Conn) {
 
 			mu.Lock()
 			item := store[key]
-			if len(item.stream > 0) {
+			if len(item.stream) > 0 {
 				last := item.stream[len(item.stream)-1]
 				if !isGreaterID(id, last) {
 					mu.Unlock()
