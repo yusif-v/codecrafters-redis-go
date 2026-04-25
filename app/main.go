@@ -175,26 +175,16 @@ func handleConnection(conn net.Conn) {
 			timeoutSec, _ := strconv.ParseFloat(parts[2], 64)
 
 			mu.Lock()
-			item, exists := store[key]
-			if exists && len(item.list) > 0 {
-				val := item.list[0]
-				item.list = item.list[1:]
-				store[key] = item
+			e := store[key]
+			if len(e.list) > 0 {
+				val := e.list[0]
+				e.list = e.list[1:]
+				store[key] = e
 				mu.Unlock()
 				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 				return
 			}
 			mu.Unlock()
-
-			if timeoutSec == 0 {
-				ch := make(chan string, 1)
-				mu.Lock()
-				waiters[key] = append(waiters[key], ch)
-				mu.Unlock()
-				val := <-ch
-				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-				return
-			}
 
 			ch := make(chan string, 1)
 			mu.Lock()
@@ -202,6 +192,7 @@ func handleConnection(conn net.Conn) {
 			mu.Unlock()
 
 			timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
+
 			select {
 			case val := <-ch:
 				timer.Stop()
