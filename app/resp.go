@@ -1,15 +1,31 @@
 package main
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 func parseRESP(input string) []string {
-	parts := strings.Split(input, "\r\n")
-	var result []string
-	for _, part := range parts {
-		if part == "" || part[0] == '*' || part[0] == '$' {
-			continue
+	lines := strings.Split(input, "\r\n")
+	if len(lines) == 0 || len(lines[0]) == 0 || lines[0][0] != '*' {
+		return nil
+	}
+	count, err := strconv.Atoi(lines[0][1:])
+	if err != nil || count <= 0 {
+		return nil
+	}
+
+	result := make([]string, 0, count)
+	i := 1
+	for j := 0; j < count && i < len(lines); j++ {
+		if len(lines[i]) == 0 || lines[i][0] != '$' {
+			return nil
 		}
-		result = append(result, part)
+		i++
+		if i < len(lines) {
+			result = append(result, lines[i])
+			i++
+		}
 	}
 	return result
 }
