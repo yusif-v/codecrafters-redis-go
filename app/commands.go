@@ -199,6 +199,28 @@ func handleCommand(conn net.Conn, parts []string) bool {
 
 		mu.Lock()
 		item := store[key]
+
+		// Auto-generate sequence number for "<time>-*" format
+		if strings.HasSuffix(id, "-*") {
+			timePart := strings.TrimSuffix(id, "-*")
+			timeInt, _ := strconv.ParseInt(timePart, 10, 64)
+			var seq int64 = 0
+			if timeInt == 0 {
+				seq = 1
+			}
+			// Find the last entry with matching time part to determine next seq
+			for i := len(item.stream) - 1; i >= 0; i-- {
+				t, s := parseID(item.stream[i])
+				if t == timeInt {
+					seq = s + 1
+					break
+				} else if t < timeInt {
+					break
+				}
+			}
+			id = fmt.Sprintf("%s-%d", timePart, seq)
+		}
+
 		if id == "0-0" {
 			mu.Unlock()
 			conn.Write([]byte("-ERR The ID specified in XADD must be greater than 0-0\r\n"))
