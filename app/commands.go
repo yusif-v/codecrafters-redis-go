@@ -173,6 +173,14 @@ func handleCommand(conn net.Conn, parts []string) bool {
 				timer.Stop()
 				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 			case <-timer.C:
+				mu.Lock()
+				for i, w := range waiters[key] {
+					if w == ch {
+						waiters[key] = append(waiters[key][:i], waiters[key][i+1:]...)
+						break
+					}
+				}
+				mu.Unlock()
 				conn.Write([]byte("*-1\r\n"))
 			}
 		}
