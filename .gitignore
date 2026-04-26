@@ -1,0 +1,23 @@
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Dependency directory
+vendor/
+
+# Environment/Project specific
+.env
+.vscode/
+.idea/
+
+# Graphify specific
+graphify-out/
+*.graph
+
+# Gemini CLI / OS Temp files
+.DS_Store
+.gemini/
