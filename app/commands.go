@@ -29,8 +29,6 @@ func isGreaterID(newID, lastID string) bool {
 	return ns > ls
 }
 
-// handleCommand dispatches the parsed command to the appropriate handler.
-// Returns true if the connection should be closed after this command.
 func handleCommand(conn net.Conn, parts []string) bool {
 	command := strings.ToLower(parts[0])
 	switch command {
@@ -208,15 +206,23 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		mu.Lock()
 		item := store[key]
 
-		// Auto-generate sequence number for "<time>-*" format
-		if strings.HasSuffix(id, "-*") {
+		if id == "*" {
+			nowMs := time.Now().UnixMilli()
+			var seq int64 = 0
+			if len(item.stream) > 0 {
+				lt, ls := parseID(item.stream[len(item.stream)-1])
+				if lt == nowMs {
+					seq = ls + 1
+				}
+			}
+			id = fmt.Sprintf("%d-%d", nowMs, seq)
+		} else if strings.HasSuffix(id, "-*") {
 			timePart := strings.TrimSuffix(id, "-*")
 			timeInt, _ := strconv.ParseInt(timePart, 10, 64)
 			var seq int64 = 0
 			if timeInt == 0 {
 				seq = 1
 			}
-			// Find the last entry with matching time part to determine next seq
 			for i := len(item.stream) - 1; i >= 0; i-- {
 				t, s := parseID(item.stream[i])
 				if t == timeInt {
