@@ -210,7 +210,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			nowMs := time.Now().UnixMilli()
 			var seq int64 = 0
 			if len(item.stream) > 0 {
-				lt, ls := parseID(item.stream[len(item.stream)-1])
+				lt, ls := parseID(item.stream[len(item.stream)-1].id)
 				if lt == nowMs {
 					seq = ls + 1
 				}
@@ -224,7 +224,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 				seq = 1
 			}
 			for i := len(item.stream) - 1; i >= 0; i-- {
-				t, s := parseID(item.stream[i])
+				t, s := parseID(item.stream[i].id)
 				if t == timeInt {
 					seq = s + 1
 					break
@@ -241,7 +241,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			return false
 		}
 		if len(item.stream) > 0 {
-			last := item.stream[len(item.stream)-1]
+			last := item.stream[len(item.stream)-1].id
 			if !isGreaterID(id, last) {
 				mu.Unlock()
 				conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
@@ -253,11 +253,41 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			return false
 		}
 
-		item.stream = append(item.stream, id)
+		item.stream = append(item.stream, streamEntry{id: id, fields: parts[3:]})
 		store[key] = item
 		mu.Unlock()
 
 		fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
+	case "xrange":
+		key := parts[1]
+		start := parts[2]
+		end := parts[3]
+
+		if !strings.Contains(start, "-") {
+			start = start + "-0"
+		}
+		if !strings.Contains(end, "-") {
+			end = end + "-9223372036854775807"
+		}
+
+		mu.Lock()
+		item := store[key]
+		mu.Unlock()
+
+		var matched []streamEntry
+		for _, e := range item.stream {
+			if !isGreaterID(start, e.id) && !isGreaterID(e.id, end) {
+				matched = append(matched, e)
+			}
+		}
+
+		fmt.Fprintf(conn, "*%d\r\n", len(matched))
+		for _, e := range matched {
+			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
+			for _, f := range e.fields {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+			}
+		}
 	}
 	return false
 }

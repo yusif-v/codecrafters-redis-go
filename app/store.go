@@ -5,10 +5,15 @@ import (
 	"time"
 )
 
+type streamEntry struct {
+	id     string
+	fields []string // alternating key-value pairs
+}
+
 type entry struct {
 	value  string
 	list   []string
-	stream []string
+	stream []streamEntry
 	expiry time.Time
 }
 
