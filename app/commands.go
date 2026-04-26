@@ -154,7 +154,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			store[key] = e
 			mu.Unlock()
 			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
-			return true
+			return false
 		}
 		mu.Unlock()
 
@@ -183,7 +183,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 
 		if !ok {
 			conn.Write([]byte("+none\r\n"))
-			return true
+			return false
 		}
 
 		if len(e.list) > 0 {
@@ -202,19 +202,19 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		if id == "0-0" {
 			mu.Unlock()
 			conn.Write([]byte("-ERR The ID specified in XADD must be greater than 0-0\r\n"))
-			return true
+			return false
 		}
 		if len(item.stream) > 0 {
 			last := item.stream[len(item.stream)-1]
 			if !isGreaterID(id, last) {
 				mu.Unlock()
 				conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
-				return true
+				return false
 			}
 		} else if !isGreaterID(id, "0-0") {
 			mu.Unlock()
 			conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
-			return true
+			return false
 		}
 
 		item.stream = append(item.stream, id)
