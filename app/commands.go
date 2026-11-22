@@ -258,6 +258,43 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		mu.Unlock()
 
 		fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
+	case "xread":
+		streamsIdx := -1
+		for i, p := range parts {
+			if strings.ToLower(p) == "streams" {
+				streamsIdx = i
+				break
+			}
+		}
+		if streamsIdx == -1 || len(parts) < streamsIdx+3 {
+			conn.Write([]byte("-ERR syntax error\r\n"))
+			return false
+		}
+		key := parts[streamsIdx+1]
+		id := parts[streamsIdx+2]
+
+		mu.Lock()
+		item := store[key]
+		var matched []streamEntry
+		for _, e := range item.stream {
+			if isGreaterID(e.id, id) {
+				matched = append(matched, e)
+			}
+		}
+		mu.Unlock()
+
+		if len(matched) == 0 {
+			conn.Write([]byte("*-1\r\n"))
+			return false
+		}
+
+		fmt.Fprintf(conn, "*1\r\n*2\r\n$%d\r\n%s\r\n*%d\r\n", len(key), key, len(matched))
+		for _, e := range matched {
+			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
+			for _, f := range e.fields {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+			}
+		}
 	case "xrange":
 		key := parts[1]
 		start := parts[2]
