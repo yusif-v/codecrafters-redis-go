@@ -29,6 +29,48 @@ func isGreaterID(newID, lastID string) bool {
 	return ns > ls
 }
 
+type streamRead struct {
+	key     string
+	entries []streamEntry
+}
+
+// readStreams collects entries whose IDs are greater than the given IDs.
+// The caller must hold mu.
+func readStreams(keys, ids []string) []streamRead {
+	var results []streamRead
+	for i, key := range keys {
+		item := store[key]
+		var matched []streamEntry
+		for _, e := range item.stream {
+			if isGreaterID(e.id, ids[i]) {
+				matched = append(matched, e)
+			}
+		}
+		if len(matched) > 0 {
+			results = append(results, streamRead{key: key, entries: matched})
+		}
+	}
+	return results
+}
+
+func writeStreams(conn net.Conn, results []streamRead) {
+	if len(results) == 0 {
+		conn.Write([]byte("*-1\r\n"))
+		return
+	}
+
+	fmt.Fprintf(conn, "*%d\r\n", len(results))
+	for _, r := range results {
+		fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(r.key), r.key, len(r.entries))
+		for _, e := range r.entries {
+			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
+			for _, f := range e.fields {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+			}
+		}
+	}
+}
+
 func handleCommand(conn net.Conn, parts []string) bool {
 	command := strings.ToLower(parts[0])
 	switch command {
@@ -259,42 +301,74 @@ func handleCommand(conn net.Conn, parts []string) bool {
 
 		fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
 	case "xread":
-		streamsIdx := -1
-		for i, p := range parts {
-			if strings.ToLower(p) == "streams" {
-				streamsIdx = i
-				break
+		blockMs := int64(-1)
+		idx := 1
+		if idx < len(parts) && strings.ToLower(parts[idx]) == "block" {
+			if idx+1 >= len(parts) {
+				conn.Write([]byte("-ERR syntax error\r\n"))
+				return false
 			}
+			ms, err := strconv.ParseInt(parts[idx+1], 10, 64)
+			if err != nil || ms < 0 {
+				conn.Write([]byte("-ERR timeout is not an integer or out of range\r\n"))
+				return false
+			}
+			blockMs = ms
+			idx += 2
 		}
-		if streamsIdx == -1 || len(parts) < streamsIdx+3 {
+		if idx >= len(parts) || strings.ToLower(parts[idx]) != "streams" {
 			conn.Write([]byte("-ERR syntax error\r\n"))
 			return false
 		}
-		key := parts[streamsIdx+1]
-		id := parts[streamsIdx+2]
 
-		mu.Lock()
-		item := store[key]
-		var matched []streamEntry
-		for _, e := range item.stream {
-			if isGreaterID(e.id, id) {
-				matched = append(matched, e)
-			}
-		}
-		mu.Unlock()
-
-		if len(matched) == 0 {
-			conn.Write([]byte("*-1\r\n"))
+		rest := parts[idx+1:]
+		if len(rest) == 0 || len(rest)%2 != 0 {
+			conn.Write([]byte("-ERR syntax error\r\n"))
 			return false
 		}
+		n := len(rest) / 2
+		keys := rest[:n]
+		ids := rest[n:]
 
-		fmt.Fprintf(conn, "*1\r\n*2\r\n$%d\r\n%s\r\n*%d\r\n", len(key), key, len(matched))
-		for _, e := range matched {
-			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
-			for _, f := range e.fields {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+		mu.Lock()
+		resolved := make([]string, n)
+		for i, key := range keys {
+			id := ids[i]
+			if id == "$" {
+				item := store[key]
+				if len(item.stream) > 0 {
+					id = item.stream[len(item.stream)-1].id
+				} else {
+					id = "0-0"
+				}
+			} else if !strings.Contains(id, "-") {
+				id = id + "-0"
+			}
+			resolved[i] = id
+		}
+		results := readStreams(keys, resolved)
+		mu.Unlock()
+
+		if len(results) == 0 && blockMs >= 0 {
+			var deadline time.Time
+			if blockMs > 0 {
+				deadline = time.Now().Add(time.Duration(blockMs) * time.Millisecond)
+			}
+			for {
+				time.Sleep(10 * time.Millisecond)
+				mu.Lock()
+				results = readStreams(keys, resolved)
+				mu.Unlock()
+				if len(results) > 0 {
+					break
+				}
+				if blockMs > 0 && time.Now().After(deadline) {
+					break
+				}
 			}
 		}
+
+		writeStreams(conn, results)
 	case "xrange":
 		key := parts[1]
 		start := parts[2]
