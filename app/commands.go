@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -29,6 +31,60 @@ func isGreaterID(newID, lastID string) bool {
 	return ns > ls
 }
 
+type client struct {
+	conn    net.Conn
+	inMulti bool
+	queue   [][]string
+}
+
+func (c *client) handle(parts []string) bool {
+	command := strings.ToLower(parts[0])
+	switch command {
+	case "multi":
+		if c.inMulti {
+			c.conn.Write([]byte("-ERR MULTI calls can not be nested\r\n"))
+			return false
+		}
+		c.inMulti = true
+		c.queue = nil
+		c.conn.Write([]byte("+OK\r\n"))
+		return false
+	case "exec":
+		if !c.inMulti {
+			c.conn.Write([]byte("-ERR EXEC without MULTI\r\n"))
+			return false
+		}
+		queued := c.queue
+		c.inMulti = false
+		c.queue = nil
+
+		var buf bytes.Buffer
+		fmt.Fprintf(&buf, "*%d\r\n", len(queued))
+		for _, q := range queued {
+			dispatch(&buf, q, false)
+		}
+		c.conn.Write(buf.Bytes())
+		return false
+	case "discard":
+		if !c.inMulti {
+			c.conn.Write([]byte("-ERR DISCARD without MULTI\r\n"))
+			return false
+		}
+		c.inMulti = false
+		c.queue = nil
+		c.conn.Write([]byte("+OK\r\n"))
+		return false
+	}
+
+	if c.inMulti {
+		c.queue = append(c.queue, parts)
+		c.conn.Write([]byte("+QUEUED\r\n"))
+		return false
+	}
+
+	return dispatch(c.conn, parts, true)
+}
+
 type streamRead struct {
 	key     string
 	entries []streamEntry
@@ -53,32 +109,32 @@ func readStreams(keys, ids []string) []streamRead {
 	return results
 }
 
-func writeStreams(conn net.Conn, results []streamRead) {
+func writeStreams(w io.Writer, results []streamRead) {
 	if len(results) == 0 {
-		conn.Write([]byte("*-1\r\n"))
+		w.Write([]byte("*-1\r\n"))
 		return
 	}
 
-	fmt.Fprintf(conn, "*%d\r\n", len(results))
+	fmt.Fprintf(w, "*%d\r\n", len(results))
 	for _, r := range results {
-		fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(r.key), r.key, len(r.entries))
+		fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(r.key), r.key, len(r.entries))
 		for _, e := range r.entries {
-			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
+			fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
 			for _, f := range e.fields {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+				fmt.Fprintf(w, "$%d\r\n%s\r\n", len(f), f)
 			}
 		}
 	}
 }
 
-func handleCommand(conn net.Conn, parts []string) bool {
+func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 	command := strings.ToLower(parts[0])
 	switch command {
 	case "ping":
-		conn.Write([]byte("+PONG\r\n"))
+		w.Write([]byte("+PONG\r\n"))
 	case "echo":
 		arg := parts[1]
-		fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(arg), arg)
+		fmt.Fprintf(w, "$%d\r\n%s\r\n", len(arg), arg)
 	case "set":
 		mu.Lock()
 		store[parts[1]] = entry{value: parts[2]}
@@ -87,16 +143,36 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			ms, _ := strconv.Atoi(parts[4])
 			go deleteAfter(parts[1], time.Duration(ms)*time.Millisecond)
 		}
-		conn.Write([]byte("+OK\r\n"))
+		w.Write([]byte("+OK\r\n"))
 	case "get":
 		mu.Lock()
 		val, ok := store[parts[1]]
 		mu.Unlock()
 		if ok {
-			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val.value), val.value)
+			fmt.Fprintf(w, "$%d\r\n%s\r\n", len(val.value), val.value)
 		} else {
-			conn.Write([]byte("$-1\r\n"))
+			w.Write([]byte("$-1\r\n"))
 		}
+	case "incr":
+		mu.Lock()
+		item, ok := store[parts[1]]
+		if !ok {
+			store[parts[1]] = entry{value: "1"}
+			mu.Unlock()
+			w.Write([]byte(":1\r\n"))
+			return false
+		}
+		n, err := strconv.ParseInt(item.value, 10, 64)
+		if err != nil {
+			mu.Unlock()
+			w.Write([]byte("-ERR value is not an integer or out of range\r\n"))
+			return false
+		}
+		n++
+		item.value = strconv.FormatInt(n, 10)
+		store[parts[1]] = item
+		mu.Unlock()
+		fmt.Fprintf(w, ":%d\r\n", n)
 	case "rpush":
 		mu.Lock()
 		item := store[parts[1]]
@@ -115,7 +191,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			ch <- val
 		}
 		mu.Unlock()
-		fmt.Fprintf(conn, ":%d\r\n", listLen)
+		fmt.Fprintf(w, ":%d\r\n", listLen)
 	case "lrange":
 		mu.Lock()
 		item := store[parts[1]]
@@ -132,7 +208,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		}
 
 		if start >= len(item.list) || start > end {
-			conn.Write([]byte("*0\r\n"))
+			w.Write([]byte("*0\r\n"))
 			return false
 		}
 		if end >= len(item.list) {
@@ -140,9 +216,9 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		}
 
 		sublist := item.list[start : end+1]
-		fmt.Fprintf(conn, "*%d\r\n", len(sublist))
+		fmt.Fprintf(w, "*%d\r\n", len(sublist))
 		for _, val := range sublist {
-			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			fmt.Fprintf(w, "$%d\r\n%s\r\n", len(val), val)
 		}
 	case "lpush":
 		mu.Lock()
@@ -152,12 +228,12 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		}
 		store[parts[1]] = item
 		mu.Unlock()
-		fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+		fmt.Fprintf(w, ":%d\r\n", len(item.list))
 	case "llen":
 		mu.Lock()
 		item := store[parts[1]]
 		mu.Unlock()
-		fmt.Fprintf(conn, ":%d\r\n", len(item.list))
+		fmt.Fprintf(w, ":%d\r\n", len(item.list))
 	case "lpop":
 		mu.Lock()
 		item := store[parts[1]]
@@ -171,16 +247,16 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			item.list = item.list[count:]
 			store[parts[1]] = item
 			mu.Unlock()
-			fmt.Fprintf(conn, "*%d\r\n", len(popped))
+			fmt.Fprintf(w, "*%d\r\n", len(popped))
 			for _, val := range popped {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+				fmt.Fprintf(w, "$%d\r\n%s\r\n", len(val), val)
 			}
 		} else {
 			val := item.list[0]
 			item.list = item.list[1:]
 			store[parts[1]] = item
 			mu.Unlock()
-			fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(val), val)
+			fmt.Fprintf(w, "$%d\r\n%s\r\n", len(val), val)
 		}
 	case "blpop":
 		key := parts[1]
@@ -193,10 +269,15 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			e.list = e.list[1:]
 			store[key] = e
 			mu.Unlock()
-			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+			fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 			return false
 		}
 		mu.Unlock()
+
+		if !allowBlocking {
+			w.Write([]byte("*-1\r\n"))
+			return false
+		}
 
 		ch := make(chan string, 1)
 		mu.Lock()
@@ -205,23 +286,23 @@ func handleCommand(conn net.Conn, parts []string) bool {
 
 		if timeoutSec == 0 {
 			val := <-ch
-			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+			fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 		} else {
 			timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
 			select {
 			case val := <-ch:
 				timer.Stop()
-				fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
+				fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 			case <-timer.C:
 				mu.Lock()
-				for i, w := range waiters[key] {
-					if w == ch {
+				for i, waiter := range waiters[key] {
+					if waiter == ch {
 						waiters[key] = append(waiters[key][:i], waiters[key][i+1:]...)
 						break
 					}
 				}
 				mu.Unlock()
-				conn.Write([]byte("*-1\r\n"))
+				w.Write([]byte("*-1\r\n"))
 			}
 		}
 	case "type":
@@ -230,16 +311,16 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		mu.Unlock()
 
 		if !ok {
-			conn.Write([]byte("+none\r\n"))
+			w.Write([]byte("+none\r\n"))
 			return false
 		}
 
 		if len(e.list) > 0 {
-			conn.Write([]byte("+list\r\n"))
+			w.Write([]byte("+list\r\n"))
 		} else if len(e.stream) > 0 {
-			conn.Write([]byte("+stream\r\n"))
+			w.Write([]byte("+stream\r\n"))
 		} else {
-			conn.Write([]byte("+string\r\n"))
+			w.Write([]byte("+string\r\n"))
 		}
 	case "xadd":
 		key := parts[1]
@@ -279,19 +360,19 @@ func handleCommand(conn net.Conn, parts []string) bool {
 
 		if id == "0-0" {
 			mu.Unlock()
-			conn.Write([]byte("-ERR The ID specified in XADD must be greater than 0-0\r\n"))
+			w.Write([]byte("-ERR The ID specified in XADD must be greater than 0-0\r\n"))
 			return false
 		}
 		if len(item.stream) > 0 {
 			last := item.stream[len(item.stream)-1].id
 			if !isGreaterID(id, last) {
 				mu.Unlock()
-				conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
+				w.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
 				return false
 			}
 		} else if !isGreaterID(id, "0-0") {
 			mu.Unlock()
-			conn.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
+			w.Write([]byte("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"))
 			return false
 		}
 
@@ -299,31 +380,31 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		store[key] = item
 		mu.Unlock()
 
-		fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(id), id)
+		fmt.Fprintf(w, "$%d\r\n%s\r\n", len(id), id)
 	case "xread":
 		blockMs := int64(-1)
 		idx := 1
 		if idx < len(parts) && strings.ToLower(parts[idx]) == "block" {
 			if idx+1 >= len(parts) {
-				conn.Write([]byte("-ERR syntax error\r\n"))
+				w.Write([]byte("-ERR syntax error\r\n"))
 				return false
 			}
 			ms, err := strconv.ParseInt(parts[idx+1], 10, 64)
 			if err != nil || ms < 0 {
-				conn.Write([]byte("-ERR timeout is not an integer or out of range\r\n"))
+				w.Write([]byte("-ERR timeout is not an integer or out of range\r\n"))
 				return false
 			}
 			blockMs = ms
 			idx += 2
 		}
 		if idx >= len(parts) || strings.ToLower(parts[idx]) != "streams" {
-			conn.Write([]byte("-ERR syntax error\r\n"))
+			w.Write([]byte("-ERR syntax error\r\n"))
 			return false
 		}
 
 		rest := parts[idx+1:]
 		if len(rest) == 0 || len(rest)%2 != 0 {
-			conn.Write([]byte("-ERR syntax error\r\n"))
+			w.Write([]byte("-ERR syntax error\r\n"))
 			return false
 		}
 		n := len(rest) / 2
@@ -349,7 +430,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 		results := readStreams(keys, resolved)
 		mu.Unlock()
 
-		if len(results) == 0 && blockMs >= 0 {
+		if len(results) == 0 && blockMs >= 0 && allowBlocking {
 			var deadline time.Time
 			if blockMs > 0 {
 				deadline = time.Now().Add(time.Duration(blockMs) * time.Millisecond)
@@ -368,7 +449,7 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			}
 		}
 
-		writeStreams(conn, results)
+		writeStreams(w, results)
 	case "xrange":
 		key := parts[1]
 		start := parts[2]
@@ -392,11 +473,11 @@ func handleCommand(conn net.Conn, parts []string) bool {
 			}
 		}
 
-		fmt.Fprintf(conn, "*%d\r\n", len(matched))
+		fmt.Fprintf(w, "*%d\r\n", len(matched))
 		for _, e := range matched {
-			fmt.Fprintf(conn, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
+			fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n*%d\r\n", len(e.id), e.id, len(e.fields))
 			for _, f := range e.fields {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(f), f)
+				fmt.Fprintf(w, "$%d\r\n%s\r\n", len(f), f)
 			}
 		}
 	}

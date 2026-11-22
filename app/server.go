@@ -25,6 +25,7 @@ func startServer() {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
+	c := &client{conn: conn}
 	buf := make([]byte, 2048)
 	for {
 		n, err := conn.Read(buf)
@@ -38,7 +39,7 @@ func handleConnection(conn net.Conn) {
 			continue
 		}
 
-		if handleCommand(conn, parts) {
+		if c.handle(parts) {
 			return
 		}
 	}
