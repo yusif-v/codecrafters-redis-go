@@ -35,6 +35,18 @@ type client struct {
 	conn    net.Conn
 	inMulti bool
 	queue   [][]string
+	watched map[string]uint64
+}
+
+// watchedKeysModified reports whether any key watched by this client has been
+// modified since the WATCH call. The caller must hold mu.
+func (c *client) watchedKeysModified() bool {
+	for key, ver := range c.watched {
+		if versions[key] != ver {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *client) handle(parts []string) bool {
@@ -58,6 +70,15 @@ func (c *client) handle(parts []string) bool {
 		c.inMulti = false
 		c.queue = nil
 
+		mu.Lock()
+		aborted := c.watchedKeysModified()
+		mu.Unlock()
+		c.watched = nil
+		if aborted {
+			c.conn.Write([]byte("*-1\r\n"))
+			return false
+		}
+
 		var buf bytes.Buffer
 		fmt.Fprintf(&buf, "*%d\r\n", len(queued))
 		for _, q := range queued {
@@ -72,6 +93,26 @@ func (c *client) handle(parts []string) bool {
 		}
 		c.inMulti = false
 		c.queue = nil
+		c.watched = nil
+		c.conn.Write([]byte("+OK\r\n"))
+		return false
+	case "watch":
+		if c.inMulti {
+			c.conn.Write([]byte("-ERR WATCH inside MULTI is not allowed\r\n"))
+			return false
+		}
+		mu.Lock()
+		if c.watched == nil {
+			c.watched = make(map[string]uint64)
+		}
+		for _, key := range parts[1:] {
+			c.watched[key] = versions[key]
+		}
+		mu.Unlock()
+		c.conn.Write([]byte("+OK\r\n"))
+		return false
+	case "unwatch":
+		c.watched = nil
 		c.conn.Write([]byte("+OK\r\n"))
 		return false
 	}
@@ -138,6 +179,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 	case "set":
 		mu.Lock()
 		store[parts[1]] = entry{value: parts[2]}
+		touch(parts[1])
 		mu.Unlock()
 		if len(parts) > 3 && strings.ToLower(parts[3]) == "px" {
 			ms, _ := strconv.Atoi(parts[4])
@@ -158,6 +200,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 		item, ok := store[parts[1]]
 		if !ok {
 			store[parts[1]] = entry{value: "1"}
+			touch(parts[1])
 			mu.Unlock()
 			w.Write([]byte(":1\r\n"))
 			return false
@@ -171,6 +214,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 		n++
 		item.value = strconv.FormatInt(n, 10)
 		store[parts[1]] = item
+		touch(parts[1])
 		mu.Unlock()
 		fmt.Fprintf(w, ":%d\r\n", n)
 	case "rpush":
@@ -181,6 +225,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 		}
 		store[parts[1]] = item
 		listLen := len(item.list)
+		touch(parts[1])
 
 		for len(waiters[parts[1]]) > 0 && len(item.list) > 0 {
 			ch := waiters[parts[1]][0]
@@ -227,6 +272,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 			item.list = append([]string{val}, item.list...)
 		}
 		store[parts[1]] = item
+		touch(parts[1])
 		mu.Unlock()
 		fmt.Fprintf(w, ":%d\r\n", len(item.list))
 	case "llen":
@@ -246,6 +292,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 			popped := item.list[:count]
 			item.list = item.list[count:]
 			store[parts[1]] = item
+			touch(parts[1])
 			mu.Unlock()
 			fmt.Fprintf(w, "*%d\r\n", len(popped))
 			for _, val := range popped {
@@ -255,6 +302,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 			val := item.list[0]
 			item.list = item.list[1:]
 			store[parts[1]] = item
+			touch(parts[1])
 			mu.Unlock()
 			fmt.Fprintf(w, "$%d\r\n%s\r\n", len(val), val)
 		}
@@ -268,6 +316,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 			val := e.list[0]
 			e.list = e.list[1:]
 			store[key] = e
+			touch(key)
 			mu.Unlock()
 			fmt.Fprintf(w, "*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(val), val)
 			return false
@@ -378,6 +427,7 @@ func dispatch(w io.Writer, parts []string, allowBlocking bool) bool {
 
 		item.stream = append(item.stream, streamEntry{id: id, fields: parts[3:]})
 		store[key] = item
+		touch(key)
 		mu.Unlock()
 
 		fmt.Fprintf(w, "$%d\r\n%s\r\n", len(id), id)
